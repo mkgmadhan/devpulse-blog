@@ -1,0 +1,286 @@
+---
+title: "TypeScript 5.x: The Features That Changed How I Write Code"
+excerpt: "From const type parameters to variadic tuple types to the new satisfies operator — the TypeScript features from the 5.x era that every developer should be using."
+date: "2026-04-05"
+author: "Sarah Kim"
+authorAvatar: "/avatars/sarah.png"
+tags: ["TypeScript", "JavaScript", "Developer Tools"]
+coverImage: "/images/typescript-5-cover.png"
+featured: false
+---
+
+TypeScript has been shipping meaningful releases consistently. The 5.x series brought features that genuinely changed how I structure code — not syntactic sugar, but type system capabilities that previously required workarounds or weren't expressible at all.
+
+Here are the ones that matter.
+
+## The `satisfies` Operator
+
+`satisfies` validates that an expression matches a type without changing the inferred type. This sounds subtle but it's enormously useful.
+
+**Before `satisfies`:**
+```typescript
+// Either you get broad type (no validation) or narrow type (loses literal info)
+const palette = {
+  red: [255, 0, 0],
+  green: "#00ff00",
+};
+// type is { red: number[], green: string } — no validation against a known type
+```
+
+**With `satisfies`:**
+```typescript
+type Color = string | [number, number, number];
+type Palette = Record<string, Color>;
+
+const palette = {
+  red: [255, 0, 0],
+  green: "#00ff00",
+  blue: [0, 0, 255],
+} satisfies Palette;
+
+// TypeScript validates the structure against Palette
+// BUT preserves narrow types for usage:
+palette.red;   // type: [number, number, number]
+palette.green; // type: string — not Color!
+```
+
+I use `satisfies` constantly for config objects, route definitions, and anything that needs both type safety and precise inference.
+
+```typescript
+// Real-world example: route config
+const routes = {
+  home: { path: '/', title: 'Home' },
+  blog: { path: '/blog', title: 'Blog' },
+  about: { path: '/about', title: 'About' },
+} satisfies Record<string, { path: string; title: string }>;
+
+// routes.home.path is typed as '/home' (literal), not just string
+type HomePath = typeof routes.home.path; // "/"
+```
+
+## Const Type Parameters
+
+Const type parameters infer literal types automatically, without requiring `as const` at every call site.
+
+```typescript
+// Without const type parameter
+function createConfig<T>(config: T) {
+  return config;
+}
+
+const c1 = createConfig({ theme: 'dark', lang: 'en' });
+// c1.theme is string — lost literal info
+
+// With const type parameter
+function createConfig<const T>(config: T) {
+  return config;
+}
+
+const c2 = createConfig({ theme: 'dark', lang: 'en' });
+// c2.theme is "dark" — literal preserved!
+```
+
+This is particularly useful for plugin systems, configuration builders, and anything that maps over object keys:
+
+```typescript
+function defineRoutes<const T extends Record<string, string>>(routes: T): T {
+  return routes;
+}
+
+const appRoutes = defineRoutes({
+  home: '/',
+  blog: '/blog',
+  about: '/about',
+});
+
+type AppRoute = typeof appRoutes[keyof typeof appRoutes]; // "/" | "/blog" | "/about"
+```
+
+## Variadic Tuple Types (and Why You Should Care)
+
+Variadic tuple types allow tuples with "spread" elements — essential for building type-safe function composition and pipelines.
+
+```typescript
+type Concat<T extends unknown[], U extends unknown[]> = [...T, ...U];
+
+type Numbers = [1, 2, 3];
+type Strings = ['a', 'b'];
+type Both = Concat<Numbers, Strings>; // [1, 2, 3, "a", "b"]
+```
+
+The practical use case: pipe-style function composition with full type inference.
+
+```typescript
+function pipe<A, B>(fn1: (a: A) => B): (a: A) => B;
+function pipe<A, B, C>(fn1: (a: A) => B, fn2: (b: B) => C): (a: A) => C;
+function pipe<A, B, C, D>(
+  fn1: (a: A) => B,
+  fn2: (b: B) => C,
+  fn3: (c: C) => D
+): (a: A) => D;
+
+// With variadic tuples, a single generic implementation is possible:
+function pipe<Fns extends ((arg: never) => unknown)[]>(
+  ...fns: PipeConstraint<Fns>
+) {
+  return (arg: Parameters<Fns[0]>[0]) =>
+    fns.reduce((acc, fn) => fn(acc as never), arg);
+}
+```
+
+## Template Literal Types
+
+Template literal types compose string literal types like string interpolation. They enable precise string typing for things like event names, CSS variables, and API paths.
+
+```typescript
+type EventName = 'click' | 'focus' | 'blur';
+type HandlerName = `on${Capitalize<EventName>}`;
+// "onClick" | "onFocus" | "onBlur"
+
+// API path typing
+type HTTPMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+type APIPath = `/api/${string}`;
+type APIEndpoint = `${HTTPMethod} ${APIPath}`;
+
+function createHandler(endpoint: APIEndpoint) {
+  // ...
+}
+
+createHandler('GET /api/users');   // ✅
+createHandler('PATCH /api/users'); // ✅ Error: "PATCH" not in HTTPMethod
+```
+
+Real-world use: a type-safe CSS variable system.
+
+```typescript
+type ColorScale = 50 | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+type ColorName = 'slate' | 'blue' | 'green' | 'red' | 'orange';
+type TailwindColor = `${ColorName}-${ColorScale}`;
+
+// Now autocomplete works for Tailwind classes
+function tw(cls: TailwindColor): string {
+  return `text-${cls}`;
+}
+
+tw('blue-500');  // ✅
+tw('blue-550'); // ✅ Error: 550 not in ColorScale
+```
+
+## `infer` with Conditions
+
+Conditional types with `infer` let you extract types from generic structures. This is the foundation of many utility types:
+
+```typescript
+// Extract the element type from an array
+type ElementOf<T> = T extends (infer E)[] ? E : never;
+type StrElement = ElementOf<string[]>; // string
+
+// Extract return type of async functions
+type Awaited<T> = T extends Promise<infer R> ? Awaited<R> : T;
+
+// Extract the type of a specific property in a union
+type ExtractProps<T, K extends keyof T> = T extends { [P in K]: infer V } ? V : never;
+
+// Practical: get param types from a function tuple
+type Params<T extends (...args: never[]) => unknown> =
+  T extends (...args: infer P) => unknown ? P : never;
+
+function add(a: number, b: number) { return a + b; }
+type AddParams = Params<typeof add>; // [number, number]
+```
+
+## The `using` Keyword (Explicit Resource Management)
+
+Stage 3 TC39 proposal, now in TypeScript 5.2+. `using` automatically calls `Symbol.dispose` when a variable leaves scope — like RAII in C++ or Python's `with` statement.
+
+```typescript
+class DatabaseConnection {
+  constructor(private url: string) {
+    console.log('Connected');
+  }
+
+  query(sql: string) { /* ... */ }
+
+  [Symbol.dispose]() {
+    console.log('Connection closed');
+  }
+}
+
+function processData() {
+  using conn = new DatabaseConnection('postgresql://localhost/mydb');
+  const results = conn.query('SELECT * FROM users');
+  // conn.dispose() called automatically when function returns
+  // — even if an exception is thrown!
+  return results;
+}
+```
+
+For async resources, use `Symbol.asyncDispose` with `await using`:
+
+```typescript
+class FileHandle {
+  async [Symbol.asyncDispose]() {
+    await this.file.close();
+  }
+}
+
+async function readConfig() {
+  await using handle = await openFile('./config.json');
+  return JSON.parse(await handle.read());
+}
+```
+
+This eliminates entire categories of resource leak bugs. Use it for database connections, file handles, network sockets, and any resource that needs cleanup.
+
+## Decorators (Finally Standard)
+
+After years in experimental limbo, TypeScript 5.0 shipped decorators aligned with the TC39 standard. The API changed significantly from the old `experimentalDecorators`.
+
+```typescript
+// Logging decorator
+function log(target: unknown, context: ClassMethodDecoratorContext) {
+  const methodName = String(context.name);
+  return function(this: unknown, ...args: unknown[]) {
+    console.log(`${methodName} called with`, args);
+    const result = (target as Function).apply(this, args);
+    console.log(`${methodName} returned`, result);
+    return result;
+  };
+}
+
+class UserService {
+  @log
+  async createUser(email: string, name: string) {
+    return db.user.create({ data: { email, name } });
+  }
+}
+```
+
+Standard decorators work without any tsconfig flags. If you were using the old `experimentalDecorators: true`, test your decorators — the semantics changed.
+
+## The TypeScript Config That Actually Works in 2026
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  }
+}
+```
+
+The options worth explaining:
+- `noUncheckedIndexedAccess` — array indexing returns `T | undefined` instead of `T`. Prevents more bugs than any other single option.
+- `exactOptionalPropertyTypes` — distinguishes `{ foo?: string }` from `{ foo: string | undefined }`. Catches real bugs.
+- `verbatimModuleSyntax` — enforces import/export type annotations where needed. Required for bundler compatibility.
+
+TypeScript's type system is good enough now that most runtime type errors are preventable at compile time. These strict options close the remaining gaps.

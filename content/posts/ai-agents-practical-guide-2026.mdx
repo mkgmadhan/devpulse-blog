@@ -1,0 +1,276 @@
+---
+title: "AI Agents in Production: What Actually Works in 2026"
+excerpt: "After two years of hype, AI agents are finally reliable enough for production use. Here's the hard-won playbook — architecture patterns, failure modes, and what to avoid."
+date: "2026-04-08"
+author: "Marcus Johnson"
+authorAvatar: "/avatars/marcus.png"
+tags: ["AI", "LLMs", "Developer Tools", "Architecture"]
+coverImage: "/images/ai-agents-cover.png"
+featured: false
+---
+
+Two years ago, AI agents were demos that worked 40% of the time. Today, the best systems work well enough that teams are putting them in production. The gap between those two states wasn't more powerful models — it was better architecture.
+
+Here's what we learned.
+
+## The Fundamental Problem with Early Agents
+
+Early agent systems failed because they treated LLMs like reliable compute. They're not. LLMs are probabilistic, non-deterministic reasoners. The architecture has to account for that.
+
+The classic mistake was building a loop:
+```
+while task_incomplete:
+    action = llm.think(context)
+    result = execute(action)
+    context += result
+```
+
+This fails predictably. The model drifts. It loses track of the original goal. It hallucinates tool results. It gets stuck in loops. By step 10, the context is a mess and the model is making decisions based on garbage.
+
+Production agents look completely different.
+
+## The Four Patterns That Work
+
+### 1. Plan-then-Execute
+
+Separate planning from execution. Have the model produce a complete plan upfront, then execute each step with human checkpoints for anything irreversible.
+
+```typescript
+async function agentRun(task: string) {
+  // Phase 1: Generate a plan (no side effects)
+  const plan = await llm.generate({
+    system: "You are a planning assistant. Generate a step-by-step plan.",
+    user: task,
+    responseFormat: PlanSchema, // Structured output
+  });
+
+  // Phase 2: Show plan to user for approval
+  const approved = await confirmWithUser(plan);
+  if (!approved) return;
+
+  // Phase 3: Execute with progress tracking
+  for (const step of plan.steps) {
+    await executeStep(step);
+    await checkpointProgress(step);
+  }
+}
+```
+
+The key insight: the model is worst at long-horizon reasoning, but good at planning individual steps when given clear constraints. Use it for what it's good at.
+
+### 2. Structured Outputs Everywhere
+
+Unstructured text responses from agents are a reliability nightmare. Use structured outputs (JSON Schema or Zod) for every agent interaction that produces something you need to act on.
+
+```typescript
+import Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
+import zodToJsonSchema from 'zod-to-json-schema';
+
+const CodeReviewSchema = z.object({
+  severity: z.enum(['critical', 'warning', 'suggestion']),
+  file: z.string(),
+  line: z.number(),
+  issue: z.string(),
+  suggestion: z.string(),
+});
+
+const ReviewResultSchema = z.object({
+  issues: z.array(CodeReviewSchema),
+  approved: z.boolean(),
+  summary: z.string(),
+});
+
+const client = new Anthropic();
+
+const response = await client.messages.create({
+  model: 'claude-opus-4-7',
+  max_tokens: 4096,
+  tools: [{
+    name: 'submit_review',
+    description: 'Submit the code review result',
+    input_schema: zodToJsonSchema(ReviewResultSchema),
+  }],
+  tool_choice: { type: 'tool', name: 'submit_review' },
+  messages: [{ role: 'user', content: `Review this code: ${code}` }],
+});
+```
+
+Forcing tool use means the model must conform to your schema. No more parsing freeform text.
+
+### 3. Deterministic Fallbacks
+
+Every tool call needs a fallback strategy. What happens when the tool fails? When the model produces invalid output? When the operation times out?
+
+```typescript
+async function robustToolCall<T>(
+  toolName: string,
+  args: unknown,
+  schema: z.ZodSchema<T>,
+  maxRetries = 3
+): Promise<T> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const result = await executeTool(toolName, args);
+      const parsed = schema.safeParse(result);
+
+      if (parsed.success) return parsed.data;
+
+      // Invalid output — tell the model what went wrong
+      args = { ...args as object, error: `Previous output was invalid: ${parsed.error.message}` };
+    } catch (err) {
+      if (attempt === maxRetries - 1) throw err;
+      await sleep(1000 * Math.pow(2, attempt)); // Exponential backoff
+    }
+  }
+  throw new Error(`Tool ${toolName} failed after ${maxRetries} attempts`);
+}
+```
+
+### 4. Context Window Management
+
+The context window is your most precious resource in long-running agents. Agents that naively append everything to context hit degraded performance (and token limits) fast.
+
+```typescript
+interface AgentContext {
+  task: string;           // Always present
+  recentActions: Action[]; // Last N actions (rolling window)
+  keyFacts: string[];     // Extracted facts from earlier steps
+  currentStep: number;
+  totalSteps: number;
+}
+
+async function compressContext(ctx: AgentContext): Promise<string> {
+  // If context is getting large, summarize earlier actions
+  if (ctx.recentActions.length > 10) {
+    const summary = await llm.summarize(ctx.recentActions.slice(0, -5));
+    ctx.recentActions = ctx.recentActions.slice(-5);
+    ctx.keyFacts.push(summary);
+  }
+
+  return buildPrompt(ctx);
+}
+```
+
+## The Agentic Loop (Production Version)
+
+Here's the full pattern used in production systems:
+
+```typescript
+async function runAgent(task: string, tools: Tool[]): Promise<AgentResult> {
+  const maxSteps = 25;
+  let context: AgentContext = { task, steps: [], facts: [] };
+
+  for (let step = 0; step < maxSteps; step++) {
+    const prompt = await compressContext(context);
+
+    const response = await llm.create({
+      model: 'claude-opus-4-7',
+      max_tokens: 8096,
+      tools: tools.map(toolToSchema),
+      messages: buildMessages(prompt),
+    });
+
+    // Check for terminal states
+    if (response.stop_reason === 'end_turn') {
+      return { success: true, result: extractResult(response) };
+    }
+
+    if (response.stop_reason !== 'tool_use') {
+      throw new Error(`Unexpected stop reason: ${response.stop_reason}`);
+    }
+
+    // Execute tool calls
+    const toolResults = await Promise.all(
+      response.content
+        .filter(c => c.type === 'tool_use')
+        .map(async (toolUse) => {
+          // Require confirmation for destructive operations
+          if (isDestructive(toolUse.name)) {
+            await confirmWithUser(toolUse);
+          }
+          return executeToolUse(toolUse);
+        })
+    );
+
+    context.steps.push({ action: response.content, results: toolResults });
+  }
+
+  return { success: false, error: 'Max steps exceeded' };
+}
+```
+
+## What to Monitor
+
+Agents in production need different observability than regular APIs:
+
+**Track per-step metrics:**
+- Token usage per step (watch for context explosion)
+- Tool success/failure rates by tool name
+- Step count distribution (bimodal distribution = model getting stuck)
+- Total wall-clock time per task
+
+**Log structured traces:**
+```typescript
+interface AgentTrace {
+  taskId: string;
+  task: string;
+  steps: {
+    stepNum: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    tools_called: string[];
+    tools_failed: string[];
+    duration_ms: number;
+  }[];
+  outcome: 'success' | 'failure' | 'max_steps';
+  total_cost_usd: number;
+}
+```
+
+Every production agent should emit these traces. They're invaluable for diagnosing regressions when you upgrade model versions.
+
+## The Human-in-the-Loop Non-Negotiable
+
+The single biggest mistake I see teams make: deploying agents that take irreversible actions without human confirmation.
+
+Draw a hard line: **anything that modifies production data, sends communications, or spends money requires explicit human approval**. This isn't optional. This is the difference between an agent that builds trust over time and one that causes a serious incident in week two.
+
+```typescript
+const DESTRUCTIVE_TOOLS = [
+  'delete_record',
+  'send_email',
+  'execute_payment',
+  'deploy_code',
+  'modify_production_config',
+];
+
+function requiresConfirmation(toolName: string): boolean {
+  return DESTRUCTIVE_TOOLS.includes(toolName);
+}
+```
+
+The overhead of confirmation is almost always worth it. Your users will learn to trust the agent precisely because it asks before doing dangerous things.
+
+## Where Agents Are Actually Reliable Today
+
+Not everywhere. Here's an honest assessment:
+
+**Reliable:**
+- Code review and analysis
+- Document summarization and extraction
+- Data transformation with validation
+- Research and synthesis from structured sources
+- Automated testing and quality checks
+
+**Reliable with guardrails:**
+- Code generation (with test suites to catch regressions)
+- Database queries (with read-only connections and row limits)
+- Email drafting (with human review before send)
+
+**Not ready for autonomous production use:**
+- Anything requiring nuanced human judgment
+- Tasks with high ambiguity and high cost of failure
+- Creative work where "correct" is subjective
+
+The honest answer is that agents are a force multiplier for humans right now, not a replacement. Design your systems accordingly and you'll ship things that actually work.

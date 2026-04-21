@@ -1,0 +1,32 @@
+{
+  "platform": {
+    "apiRuntime": "node:20"
+  },
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": ["/api/*", "/_next/*", "/images/*", "/feed.xml", "/sitemap.xml", "/robots.txt"]
+  },
+  "routes": [
+    {
+      "route": "/feed.xml",
+      "headers": {
+        "content-type": "application/xml; charset=utf-8"
+      }
+    },
+    {
+      "route": "/sitemap.xml",
+      "headers": {
+        "content-type": "application/xml; charset=utf-8"
+      }
+    }
+  ],
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()"
+  },
+  "mimeTypes": {
+    ".xml": "application/xml"
+  }
+}

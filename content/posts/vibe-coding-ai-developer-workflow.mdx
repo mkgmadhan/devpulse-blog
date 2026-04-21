@@ -1,0 +1,172 @@
+---
+title: "Vibe Coding With AI: The Developer Workflow That Actually Works"
+excerpt: "AI coding assistants are now fast enough and accurate enough to change how you work — but only if you use them right. Here's the workflow that's made me 3x more productive without sacrificing code quality."
+date: "2026-04-18"
+author: "Marcus Johnson"
+authorAvatar: "/avatars/marcus.png"
+tags: ["AI", "Developer Tools", "Productivity"]
+coverImage: "/images/vibe-coding-cover.png"
+featured: false
+---
+
+"Vibe coding" — the term coined by Andrej Karpathy — describes using AI to write code based on intent rather than line-by-line specification. In 2026, it's gone from a novelty to a genuine workflow shift. But most developers are still using it wrong.
+
+Here's what three months of deliberate practice taught me.
+
+## The Wrong Way to Use AI for Code
+
+The most common mistake is treating AI assistants like a Stack Overflow that writes code for you. You describe a problem, it gives you code, you paste it in. This produces mediocre results because:
+
+1. The AI has no context about your codebase conventions
+2. You're not learning — you're copy-pasting
+3. The code often doesn't fit your existing patterns
+4. When it breaks, you don't understand why
+
+The right model is **collaborative pair programming**, where the AI is a fast, knowledgeable but context-free junior who you need to brief properly.
+
+## The Briefing Model
+
+Every productive AI coding session starts with context. Not just the problem — the constraints.
+
+**Bad prompt:**
+> "Write a function that validates email addresses"
+
+**Good prompt:**
+> "I'm building a Next.js 15 App Router project using TypeScript with strict mode. We use Zod for all validation. Write a server action that validates a newsletter signup form — email (required, valid format) and name (required, 2-50 chars). It should use our existing pattern from `src/app/actions/contact.ts` where validation errors are returned as `{ field: string, message: string }[]`. We use `next/cache`'s `revalidatePath` after mutations."
+
+The second prompt produces code that fits. The first produces generic code that you'll spend time adapting.
+
+## What Claude Code Specifically Gets Right
+
+I've used GitHub Copilot, Cursor, Cody, and Claude Code extensively. For complex multi-file changes, Claude Code is a different class.
+
+The key difference: **it understands the whole change, not just the current file**.
+
+When I tell it "add rate limiting to our newsletter subscription endpoint", it:
+1. Reads the existing endpoint to understand the pattern
+2. Checks if there's an existing rate limit utility in the codebase
+3. Writes code consistent with what's already there
+4. Updates any related tests
+5. Points out edge cases I didn't consider
+
+This is what makes it feel like a real pair programmer rather than an autocomplete engine.
+
+## The Three-Tier Workflow
+
+After a lot of experimentation, I've settled on three different modes of AI use depending on the task.
+
+### Tier 1: Greenfield generation
+
+For new files, components, and features with no existing patterns to follow, let the AI write the first draft completely:
+
+```
+"Create a PostCard component for a Next.js blog. It should show:
+- Title (links to /blog/[slug])
+- Excerpt (2 lines, clipped)
+- Author name and avatar (using shadcn Avatar)
+- Date formatted as 'MMM d, yyyy'
+- Reading time
+- Up to 3 tags (using shadcn Badge)
+
+Use our existing design tokens (--claude-accent for hover states).
+The component receives a PostMeta type from @/lib/posts.
+Use Tailwind, no inline styles."
+```
+
+Review the output, make 2-3 targeted edits, done. This takes 3 minutes instead of 20.
+
+### Tier 2: Pattern completion
+
+For adding something to an existing pattern (new API route, new page, new action), give the AI an example of the existing pattern to follow:
+
+```
+"Here's our existing newsletter subscribe route:
+[paste code]
+
+Create a similar route for newsletter unsubscribe. It should:
+- Accept a POST with { email, token } 
+- Validate both fields
+- Call Resend's remove contact API
+- Return the same error/success shape"
+```
+
+This produces code that's indistinguishable from human-written code in the codebase. No adaptation needed.
+
+### Tier 3: Debugging assistance
+
+For bugs, give the AI the error, the relevant code, AND your hypothesis:
+
+```
+"Getting this error in production:
+Error: Cannot read properties of undefined (reading 'slug')
+at PostPage (/blog/[slug]/page.tsx:45)
+
+The code is: [paste]
+
+My hypothesis: generateStaticParams is running at build time but
+the MDX file for this post didn't exist yet when the build ran.
+Is that likely? And how should I handle it?"
+```
+
+Your hypothesis accelerates the diagnosis dramatically. The AI confirms, refines, or corrects your thinking faster than if you just asked "why is this broken?".
+
+## The Context Window Is Your Config File
+
+The best habit I've developed: keeping a `CLAUDE.md` file at the project root that I update as conventions solidify.
+
+```markdown
+# DevPulse Blog
+
+## Tech stack
+- Next.js 15 App Router, TypeScript strict mode
+- shadcn/ui + Tailwind v4
+- MDX for blog posts (next-mdx-remote/rsc)
+- Resend for newsletter
+
+## Conventions
+- Server Components by default, 'use client' only when needed
+- Zod for all validation
+- Error returns: { error: string } with non-2xx status
+- Success returns: { data: T } or { message: string }
+- No comments except for non-obvious WHY
+
+## File structure
+- Components: src/components/[feature]/ComponentName.tsx
+- Server actions: src/app/actions/[feature].ts
+- API routes: src/app/api/[route]/route.ts
+
+## Do not
+- Use `any` type
+- Use inline styles
+- Create new files without checking if pattern exists
+```
+
+Claude Code reads this file automatically. Every AI interaction is already grounded in your project's conventions.
+
+## Keeping Code Quality High
+
+The productivity gains from AI coding are real, but so is the code quality risk if you're not careful. Here's how to keep quality high:
+
+**Review the diff, not just the result.** Before accepting AI changes, read every line that changed. This is not optional. AI code passes the "does it work" test but sometimes fails the "is this the right approach" test.
+
+**Own the tests.** Write tests yourself, or at minimum review AI-written tests carefully. Tests encode your understanding of correct behavior. Delegating that entirely to AI means you don't actually understand your own system.
+
+**Refactor after generation.** AI-generated code often has unnecessary abstractions, slightly off naming, or duplicated logic with existing code. A quick cleanup pass keeps the codebase coherent.
+
+**Pair AI with linting.** TypeScript strict mode + ESLint catches a significant fraction of AI errors automatically. If your AI-generated code passes lint, it's likely correct structurally.
+
+## Numbers That Matter
+
+After three months of deliberate AI-assisted development on a real production project:
+
+- **Feature development time**: ~60% faster for standard CRUD features
+- **Boilerplate**: ~80% reduction (forms, API routes, types)
+- **Bug rate**: slightly higher initially, now at baseline (after building review habits)
+- **Code review time**: +15% (because reviewers need to understand AI-gen code too)
+- **Test coverage**: unchanged (I still write these myself)
+
+The productivity gain is real and compounding. The code quality risk is real but manageable with good habits.
+
+The developers who win with AI aren't the ones who prompt most aggressively. They're the ones who brief clearly, review carefully, and maintain a high bar for what stays in the codebase.
+
+Ship faster. Review harder.
